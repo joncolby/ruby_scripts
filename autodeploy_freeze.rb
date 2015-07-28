@@ -2,20 +2,25 @@ require 'net/http'
 require 'net/https'
 require 'pstore'
 
+abort("script expects argument:  freeze|unfreeze") if ARGV.empty? || ! %w(freeze unfreeze).include?(ARGV[0])
+
+puts "setting autodeploy production queue to: #{ARGV[0]}"
+
 username='admin'
-password='XXXXX'
+password='XXXXXX'
 pstore_file='autodeploy-cookies.pstore'
 cookies = PStore.new(pstore_file)
 autodeploy_url='autodeploy.corp.mobile.de'
 http = Net::HTTP.new(autodeploy_url, 443)
 http.use_ssl = true
 http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-#path = '/autodeploy/login/auth'
-path = '/autodeploy/j_spring_security_check'
-freeze_path='/autodeploy/admin/freeze'
-unfreeze_path='/autodeploy/admin/unfreeze'
+login_path = '/autodeploy/j_spring_security_check'
 
-response, data = http.post(path,"j_username=#{username}&j_password=#{password}",{'Content-Type' => 'application/x-www-form-urlencoded'})
+path='/autodeploy/admin/unfreeze'
+path='/autodeploy/admin/freeze' if ARGV[0] == 'freeze'
+
+
+response, data = http.post(login_path,"j_username=#{username}&j_password=#{password}",{'Content-Type' => 'application/x-www-form-urlencoded'})
 
 cookie = response['set-cookie']
 
@@ -33,7 +38,7 @@ get_headers = {
   'Content-Type' => 'application/x-www-form-urlencoded'
 }
 
-response = http.get(unfreeze_path,get_headers)
+response = http.get(path,get_headers)
 
 # delete cookie store file
 File.delete(pstore_file)

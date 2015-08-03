@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'optparse'
-require 'mesos_consul_consistency_check'
+require 'panteras_api'
 require 'json'
 
 config_default = {
@@ -17,7 +17,7 @@ bad_news = []
 good_news = []
 
 OptionParser.new("Usage: #{$0} [options]")  do |opts|
-  opts.release =  MesosConsulConsistencyCheck::VERSION
+  opts.release =  '0.0.1'
   
   opts.on("-m", "--mesos-master-hostname MESOS_MASTER_HOSTNAME", "Default: #{config_default[:mesos_master_hostname]}") do |m|
     options[:mesos_master_hostname] = m

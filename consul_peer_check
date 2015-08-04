@@ -1,0 +1,88 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'open3'
+require 'net/http'
+require 'json'
+require 'socket'
+
+
+options={}
+  
+$VERSION='0.0.1'
+$CONSUL_HOST=Socket.gethostbyname(Socket.gethostname.strip).first
+#$CONSUL_HOST='localhost'
+$CONSUL_API_PORT=8500
+$CONSUL_RPC_PORT=8400
+$CONSUL_CMD='/opt/consul/consul'
+#$CONSUL_CMD='/usr/local/bin/consul'
+$CONSUL_LEADER_URI='/v1/status/leader'
+$CONSUL_PEERS_URI='/v1/status/peers'
+$CONSUL_MEMBERS_URI='/v1/agent/members'
+$ERROR_EXIT_CODE=2
+
+defaults={:debug => false, :consul_host => $CONSUL_HOST, :consul_port => $CONSUL_API_PORT }
+  
+OptionParser.new("Usage: #{$0} [options]") do |opts|
+  opts.release = $VERSION
+  opts.on("-d", "--debug", "Debug on") do |d|
+    options[:debug] = true
+  end 
+  opts.on("-h", "--host CONSUL_HOST", "Consul host. Default: #{$CONSUL_HOST}") do |c|
+    options[:consul_host] = c
+  end
+  opts.on("-p", "--port CONSUL_PORT", "Consul HTTP-API port. Default: #{$CONSUL_API_PORT}") do |p|
+    options[:consul_port] = p
+  end
+  
+end.parse!
+
+config=defaults.merge!(options)
+
+#  http://<consul-host>:8500/v1/status/peers
+uri=URI.join("http://#{config[:consul_host]}:#{config[:consul_port]}", $CONSUL_PEERS_URI)
+
+response=nil
+begin
+  response=Net::HTTP.get(uri)
+rescue Exception => e
+  puts "could not connect to consul uri #{uri}"
+  exit $ERROR_EXIT_CODE
+end
+
+#  members according to consul peers api call
+peers=JSON.parse(response)
+puts "peers (#{uri}): #{peers}" if config[:debug]
+  
+# members according to consul agent/members api call
+
+uri=URI.join("http://#{config[:consul_host]}:#{config[:consul_port]}", $CONSUL_MEMBERS_URI)
+
+response=nil
+begin
+  response=Net::HTTP.get(uri)
+rescue Exception => e
+  puts "could not connect to consul uri #{uri}"
+  exit $ERROR_EXIT_CODE
+end
+
+members=JSON.parse(response)
+consul_role_members = members.select { |m| m['Tags']['role'] == 'consul' }
+consul_role_members_hosts = consul_role_members.collect { |c| c['Name']}
+puts "consul role members (#{uri}): #{consul_role_members_hosts}" if config[:debug]
+
+puts "http-api peer count (http-api): #{peers.size}" if config[:debug]
+puts "consul members node count (http-api): #{consul_role_members.size}" if config[:debug]
+  
+msg = lambda { |result|  "peer count (#{peers.size}) " + result + " consul role node count (#{consul_role_members.size})"}
+if peers.size == consul_role_members.size
+  puts msg.call("matches") 
+  exit 0
+else
+  puts msg.call("does not match")
+  puts "peers says: #{peers.join('|')}"
+  puts "consul members says: #{consul_role_members_hosts.join('|')}"
+  exit $ERROR_EXIT_CODE
+end
+
+

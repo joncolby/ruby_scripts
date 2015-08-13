@@ -1,0 +1,124 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'ostruct'
+
+# implemented as a Ruby script because:
+# * environment variables with special characters are easier to deal with
+# * logic for scanning ENV hash also easier with a higher-level-language
+$MARATHON_DEPLOY_PROGRAM="marathon_deploy"
+$DOWNLOAD_URL_ORIGINAL='https://autodeploy.corp.mobile.de/storage'
+$DOWNLOAD_URL_REPLACEMENT='http://maven-download.mobile.rz/maven'
+
+$MARATHON_ENDPOINT_FRA='http://consul.service.fra.consul:8080'
+$MARATHON_ENDPOINT_AMS='http://consul.service.ams.consul:8080'
+
+options = OpenStruct.new
+options.debug = true
+options.marathon_deploy = $MARATHON_DEPLOY_PROGRAM
+options.executable_set = false
+options.translate_download_url = false
+
+OptionParser.new() do |opt|
+
+ opt.on('-d', '--debug', 'debug mode') do |d|
+ 	options.debug = true
+ end
+ 
+ opt.on('-m', '--marathon-deploy MARATHON_DEPLOY_PATH', "absolute path to marathon_deploy. default: #{options.marathon_deploy}") do |m|
+ 	options.marathon_deploy = m
+ 	options.executable_set = true
+ end
+
+end.parse!
+
+puts "# +-+-+ DEBUG MODE ON +-+-+" if options.debug
+
+# if the executable is provided as an option, it must be called 'marathon_deploy' 
+abort "The filename must be named \'#{$MARATHON_DEPLOY_PROGRAM}\'" unless File.basename(options.marathon_deploy) == $MARATHON_DEPLOY_PROGRAM
+
+if options.executable_set
+	if ! File.exist?(options.marathon_deploy) or ! File.executable?(options.marathon_deploy)
+		abort "#{options.marathon_deploy} does not exist or is not executable" 
+	end
+else
+	locations = ENV['PATH'].split(File::PATH_SEPARATOR).select do |path|
+		File.exists?(File.join(path, $MARATHON_DEPLOY_PROGRAM)) && 
+		File.executable?(File.join(path, $MARATHON_DEPLOY_PROGRAM)) && 
+		!File.directory?(File.join(path, $MARATHON_DEPLOY_PROGRAM)) 
+	end
+	
+	abort "#{$MARATHON_DEPLOY_PROGRAM} was not found in PATH" if locations.empty?
+	options.marathon_deploy = File.join(locations.first, $MARATHON_DEPLOY_PROGRAM)
+	puts "# marathon_deploy found at: #{options.marathon_deploy}" if options.debug
+    
+end
+
+# Jenkins provides the ENV variables needed for this script.
+# However, this can be used to load ENV properties for debugging
+=begin
+File.open('deployment.properties','r') do |f|
+  while line = f.gets do
+    k,v = line.split(/=/)
+    ENV[k] = v
+  end
+end
+=end
+
+
+# check for required key 'application_name'
+app_key = ENV['application_name'] && ENV['application_name'].strip
+abort "Required ENV['application_name'] was not found or is empty" if app_key.nil? or app_key =~ /^\s*$/
+
+puts "# Application name: #{app_key}" if options.debug
+
+# This program expects ENV variable 'subkeys' with these values in the format <application_name>.subkey
+# example: mobile-ios-watch-service.jar.revision=20150810T1618.master.d069b92
+required_subkeys = %w(url revision)
+
+params = Hash.new
+required_subkeys.each { |subkey| params[subkey.to_sym] = ENV["#{app_key}.#{subkey}"] }
+
+puts "# Params hash: " if options.debug
+params.each_pair { |k,v| puts "# #{k}=>#{v}" } if options.debug
+
+puts "# Application download url: #{params[:url]}" if options.debug
+
+not_defined = params.select {|k,v| v.nil? }
+
+abort "error => one or more required parameters were not defined: " + not_defined.keys.join(',') unless not_defined.empty?
+
+params[:url] = params[:url].gsub(%r|#{$DOWNLOAD_URL_ORIGINAL}|, $DOWNLOAD_URL_REPLACEMENT)
+
+puts "# Download url with datacenter domain: #{params[:url]}" if options.debug
+
+application_no_extension = File.basename(app_key, File.extname(app_key))
+deployment_plan_path = File.expand_path(File.join(File.dirname(__FILE__),application_no_extension))
+puts "# Checking for directory with name: #{deployment_plan_path}" if options.debug
+abort "directory #{deployment_plan_path} was not found" unless File.directory?(deployment_plan_path)
+
+deploy_plan = Dir.glob("#{deployment_plan_path}/*.{yaml,yml}")
+
+abort "Aborting. No deployment plan found in directory #{deployment_plan_path}." if deploy_plan.empty? 
+abort "Aborting. Multiple deployment plans found in directory #{deployment_plan_path}: #{deploy_plan.join(',')}" if deploy_plan.length > 1
+
+puts "# Using found deployment plan #{deploy_plan.first}" if options.debug
+
+if options.marathon_deploy =~ /#{File::SEPARATOR}.rvm#{File::SEPARATOR}/
+	puts "# RVM detected in path to executable #{options.marathon_deploy}.  Replacing 'bin' with 'wrappers'"
+	options.marathon_deploy = options.marathon_deploy.sub(/bin#{File::SEPARATOR}#{$MARATHON_DEPLOY_PROGRAM}$/,"wrappers#{File::SEPARATOR}#{$MARATHON_DEPLOY_PROGRAM}")
+
+	if ! File.exist?(options.marathon_deploy) or ! File.executable?(options.marathon_deploy)
+		abort "#{options.marathon_deploy} does not exist or is not executable" 
+	end
+end
+
+puts "# Deploying to FRA"
+ENV['DC']="46"
+system("#{options.marathon_deploy}", "-e PRODUCTION", "-u #{$MARATHON_ENDPOINT_FRA}", "#{deploy_plan.first}")
+abort "Deployment to FRA failed. Aborting script." unless $?.success?
+
+puts "# Deploying to AMS"
+ENV['DC']="47"
+system("#{options.marathon_deploy}", "-e PRODUCTION", "-u #{$MARATHON_ENDPOINT_AMS}", "#{deploy_plan.first}")
+abort "Deployment to AMS failed. Aborting script." unless $?.success?
